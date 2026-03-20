@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 import requests
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
@@ -55,6 +56,14 @@ def download_file(download_url, output_path):
     response = requests.get(download_url, stream=True)
     if response.status_code == 200:
         total_size = int(response.headers.get('content-length', 0))
+        
+        # Disk space check
+        target_dir = os.path.dirname(os.path.abspath(output_path))
+        free_space = shutil.disk_usage(target_dir).free
+        if free_space < (total_size + 52428800):
+            log.error("Insufficient disk space", f"Needs {total_size / (1024**3):.2f} GB")
+            raise SystemExit("Aborting script: Not enough free space to complete this download.")
+
         block_size = 8192
 
         with open(output_path, 'wb') as f, tqdm(
@@ -131,7 +140,54 @@ downloads_folder = os.path.join("downloads", game_name)
 os.makedirs(downloads_folder, exist_ok=True)
 log.info("Download folder created/verified", downloads_folder)
 
-for link in links:
+# Pre-fetch file names for the selection menu
+log.info("Preparing selection menu", "Fetching file names, please wait...")
+available_files = []
+
+for idx, link in enumerate(links):
+    try:
+        response = requests.get(link, headers=headers, timeout=10)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            meta_title = soup.find('meta', attrs={'name': 'title'})
+            file_name = meta_title['content'] if meta_title else f"Unknown_File_{idx+1}"
+            available_files.append({"index": idx + 1, "name": file_name, "link": link})
+            print(f"{log.colors['lightcyan']}[{idx + 1}]{log.colors['reset']} {file_name}")
+        else:
+            available_files.append({"index": idx + 1, "name": f"Failed_to_fetch_name_{idx+1}", "link": link})
+            print(f"{log.colors['lightred']}[{idx + 1}]{log.colors['reset']} Failed to fetch (URL: {link[-20:]})")
+    except Exception as e:
+        available_files.append({"index": idx + 1, "name": f"Error_{idx+1}", "link": link})
+        print(f"{log.colors['lightred']}[{idx + 1}]{log.colors['reset']} Error fetching link {idx + 1}")
+
+# Get user selection
+user_choice = log.input("Enter file numbers to download (e.g., 1, 3, 4-6) or empty for all: ")
+selected_links = []
+
+if user_choice.strip().lower() == '':
+    selected_links = [item["link"] for item in available_files]
+else:
+    try:
+        selected_indices = []
+        for part in user_choice.split(','):
+            part = part.strip()
+            if '-' in part:
+                start, end = map(int, part.split('-'))
+                selected_indices.extend(range(start, end + 1))
+            else:
+                selected_indices.append(int(part))
+        
+        selected_links = [item["link"] for item in available_files if item["index"] in selected_indices]
+    except ValueError:
+        log.error("Invalid input", "Please enter standard numbers or ranges.")
+        raise SystemExit(1)
+
+if not selected_links:
+    log.warning("No files selected", "Exiting script.")
+    raise SystemExit(1)
+
+# Process selected downloads
+for link in selected_links:
     log.info(f"Started Processing", f"{link[:30]}...{link[-10:]}")
     response = requests.get(link, headers=headers)
 
@@ -154,13 +210,33 @@ for link in links:
         match = re.search(r'window\.open\(["\'](https?://[^\s"\'\)]+)', download_function)
         if match:
             download_url = match.group(1)
-            log.info(f"Found Download Url", f"{download_url[:70]}...")
             output_path = os.path.join(downloads_folder, file_name)
-            try:
-                download_file(download_url, output_path)
-                remove_link(link)
-            except Exception as e:
-                log.error(f"Failed To Download File", str(e))
+            
+            # File existence and size check
+            should_download = True
+            if os.path.exists(output_path):
+                try:
+                    check_resp = requests.get(download_url, stream=True, headers=headers)
+                    remote_size = int(check_resp.headers.get('content-length', 0))
+                    check_resp.close()
+                    local_size = os.path.getsize(output_path)
+                    
+                    if remote_size > 0 and local_size == remote_size:
+                        log.warning("File exists and sizes match, skipping", file_name)
+                        remove_link(link)
+                        should_download = False
+                    else:
+                        log.warning("File exists but size mismatch, redownloading", file_name)
+                except Exception as e:
+                    log.error("Failed to verify file sizes", str(e))
+
+            if should_download:
+                log.info(f"Found Download Url", f"{download_url[:70]}...")
+                try:
+                    download_file(download_url, output_path)
+                    remove_link(link)
+                except Exception as e:
+                    log.error(f"Failed To Download File", str(e))
         else:
             log.error("No Download Url Found", response.status_code)
     else:
