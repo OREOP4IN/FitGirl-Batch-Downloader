@@ -1,6 +1,6 @@
 # FitGirl Repacks Batch Downloader
 
-This Python script automates the process of extracting and downloading file parts from FitGirl Repacks. It specifically targets and scrapes `fuckingfast.co` mirror links from a provided game page, batches the downloads, and organizes the output files into structured directories.
+This Python script automates the process of extracting and downloading file parts from [FitGirl Repacks](https://fitgirl-repacks.site/). It specifically targets and scrapes `fuckingfast.co` mirror links from a provided game page, batches the downloads, and organizes the output files into structured directories.
 
 ## Features
 
